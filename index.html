@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarot - Real Reading</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; cursor: none; font-family: "Microsoft YaHei", sans-serif; }
+        
+        #debug-console { position: absolute; bottom: 10px; left: 10px; width: 300px; max-height: 100px; background: rgba(0,0,0,0.5); color: #444; font-size: 10px; pointer-events: none; overflow: hidden; border: none; }
+
+        /* 左上角 UI 布局 */
+        #ui-container {
+            position: absolute; top: 30px; left: 30px; z-index: 10;
+            display: flex; flex-direction: column; gap: 10px;
+            pointer-events: none;
+            max-width: 350px;
+        }
+
+        .status-box { 
+            border-left: 3px solid #d4af37; background: rgba(0,0,0,0.7); 
+            padding: 8px 15px; color: #d4af37; font-size: 12px; 
+            letter-spacing: 1px; width: fit-content; backdrop-filter: blur(4px);
+        }
+        .highlight { color: #fff; font-weight: bold; }
+
+        /* [新增] 牌义解读面板 */
+        #reading-panel {
+            margin-top: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(212, 175, 55, 0.5);
+            border-radius: 4px;
+            padding: 20px;
+            opacity: 0;
+            transition: opacity 0.5s;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+        #reading-title {
+            color: #fff; font-size: 24px; font-weight: bold;
+            margin-bottom: 5px; border-bottom: 1px solid #d4af37;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px rgba(212, 175, 55, 0.6);
+        }
+        #reading-keywords {
+            color: #d4af37; font-size: 12px; margin-bottom: 15px; letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        #reading-text {
+            color: #ddd; font-size: 14px; line-height: 1.6;
+            text-align: justify;
+        }
+
+        /* 历史记录 */
+        #history-panel {
+            margin-top: 10px; width: 100%; background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 10px;
+        }
+        .history-title { color: #888; font-size: 10px; margin-bottom: 5px; }
+        #history-list { list-style: none; padding: 0; margin: 0; max-height: 150px; overflow-y: hidden; display: flex; flex-direction: column-reverse; }
+        .history-item { color: #aaa; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
+
+        /* 光标 */
+        #hand-cursor { position: absolute; width: 20px; height: 20px; border: 2px solid rgba(255, 255, 255, 0.9); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 999; box-shadow: 0 0 8px rgba(255, 255, 255, 0.4); transition: width 0.1s, height 0.1s, background 0.1s; }
+        #hand-cursor.pinch { background: rgba(0, 255, 255, 0.6); width: 12px; height: 12px; border-color: #00ffff; }
+        
+        .input_video { display: none; }
+        #loader { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #d4af37; letter-spacing: 4px; font-size: 14px; transition: opacity 0.5s; }
+        .loading-bar { width: 150px; height: 1px; background: #333; margin-top: 20px; }
+        .progress { width: 0%; height: 100%; background: #d4af37; transition: width 0.2s; }
+    </style>
+    
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+          "@tweenjs/tween.js": "https://unpkg.com/@tweenjs/tween.js@23.1.1/dist/tween.esm.js"
+        }
+      }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div id="loader"><div>INITIALIZING THE ARCANA...</div><div class="loading-bar"><div class="progress" id="load-progress"></div></div></div>
+    
+    <div id="debug-console">System Ready.</div>
+    <div id="hand-cursor"></div>
+
+    <div id="ui-container">
+        <div class="status-box">GESTURE: <span id="gesture-text" class="highlight">NONE</span></div>
+        <div class="status-box">ACTION: <span id="action-text" class="highlight">IDLE</span></div>
+        
+        <div id="reading-panel">
+            <div id="reading-title">Card Name</div>
+            <div id="reading-keywords">Keywords</div>
+            <div id="reading-text">Meaning description...</div>
+        </div>
+
+        <div id="history-panel">
+            <div class="history-title">HISTORY LOG</div>
+            <ul id="history-list"></ul>
+        </div>
+    </div>
+
+    <video class="input_video"></video>
+    <div id="canvas-container"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'; 
+        import TWEEN from '@tweenjs/tween.js';
+
+        // --- 🔮 78张塔罗牌数据库 ---
+        const TAROT_DATA = {
+            // 大阿卡纳 (0-21)
+            0: { name: "愚人 (The Fool)", keys: "新的开始、冒险、纯真、流浪", desc: "愚人代表无限的潜力。你正站在悬崖边缘，准备踏入未知的旅程。这可能意味着一个新的开始，或者需要你凭直觉行事，放下恐惧。" },
+            1: { name: "魔术师 (The Magician)", keys: "创造力、技能、意志力、显化", desc: "魔术师象征着显化的力量。你拥有实现目标所需的所有资源。现在是采取行动、利用你的技能将想法变为现实的最佳时机。" },
+            2: { name: "女祭司 (High Priestess)", keys: "直觉、潜意识、神秘、内在", desc: "女祭司守护着潜意识的帷幕。这是一个向内看、倾听直觉的时刻。答案不在外部世界，而在你的内心深处。" },
+            3: { name: "皇后 (The Empress)", keys: "丰饶、母性、自然、感官", desc: "皇后代表着富足与创造力。你可能正在孕育一个新的计划，或者享受生活中的美好事物。这是一个充满关怀与成长的时期。" },
+            4: { name: "皇帝 (The Emperor)", keys: "权威、结构、控制、父亲形象", desc: "皇帝象征着秩序与规则。现在需要建立结构，运用逻辑和纪律来处理问题。这是一个巩固基础、确立权威的时刻。" },
+            5: { name: "教皇 (The Hierophant)", keys: "传统、精神指引、信仰、教育", desc: "教皇代表着既定的传统和信仰体系。你可能需要寻求导师的指引，或者遵循传统的路径来解决问题。" },
+            6: { name: "恋人 (The Lovers)", keys: "爱、和谐、关系、价值观选择", desc: "恋人不仅代表爱情，也代表重大的选择。你需要在两个方面之间做出决定，这通常关乎你的价值观和真正渴望的东西。" },
+            7: { name: "战车 (The Chariot)", keys: "意志力、胜利、决心、方向", desc: "战车代表通过意志力克服障碍。只要你保持专注并控制好相互冲突的力量，胜利就在前方。" },
+            8: { name: "力量 (Strength)", keys: "勇气、耐心、内在力量、同情", desc: "真正的力量不是武力，而是内心的坚韧。用耐心和同情心去驯服内心的野兽，你将能够克服任何困难。" },
+            9: { name: "隐士 (The Hermit)", keys: "内省、孤独、寻求真理、指引", desc: "隐士建议你暂时从喧嚣中撤退，独自寻找内心的光芒。这不仅仅是孤独，而是一段自我发现的必要旅程。" },
+            10: { name: "命运之轮 (Wheel of Fortune)", keys: "改变、周期、命运、转折点", desc: "命运之轮在转动，生活充满了起伏。这是一个不可避免的改变时刻，请顺应潮流，相信宇宙的安排。" },
+            11: { name: "正义 (Justice)", keys: "公平、真理、因果、法律", desc: "正义代表着因果循环。你种下什么因，就会收获什么果。这是一个需要诚实面对自己和他人，做出公正决定的时刻。" },
+            12: { name: "倒吊人 (The Hanged Man)", keys: "牺牲、换个角度、等待、放下", desc: "事情可能停滞不前，但这正是换个角度看世界的机会。有时候，放下控制，稍微牺牲一下，反而能获得更大的智慧。" },
+            13: { name: "死神 (Death)", keys: "结束、转变、重生、放手", desc: "不要害怕，死神很少代表肉体的死亡，而是象征着某个阶段的结束。只有清理旧的，新的事物才能生长。" },
+            14: { name: "节制 (Temperance)", keys: "平衡、适度、耐心、治愈", desc: "节制提醒我们要寻找中庸之道。通过融合对立的力量，保持耐心和平衡，你将找到内心的平静。" },
+            15: { name: "恶魔 (The Devil)", keys: "束缚、物质主义、诱惑、成瘾", desc: "恶魔代表我们被自己的欲望或恐惧所束缚。意识到这些锁链其实是松开的，你随时可以选择解脱。" },
+            16: { name: "高塔 (The Tower)", keys: "突变、灾难、觉醒、破坏", desc: "高塔代表突如其来的剧变。虽然痛苦，但它摧毁了建立在虚假基础上的事物。这是为了让你重建得更真实、更坚固。" },
+            17: { name: "星星 (The Star)", keys: "希望、灵感、宁静、疗愈", desc: "在风暴之后，星星带来了希望与治愈。这是一个充满灵感和宁静的时刻，相信未来，保持信心。" },
+            18: { name: "月亮 (The Moon)", keys: "幻觉、恐惧、潜意识、不安", desc: "月亮代表着模糊不清和潜意识的恐惧。事情可能不像表面看起来那样。请相信你的直觉，穿过迷雾。" },
+            19: { name: "太阳 (The Sun)", keys: "快乐、成功、活力、积极", desc: "太阳是塔罗牌中最积极的牌之一。它预示着成功、快乐和清晰。享受当下的温暖和活力吧！" },
+            20: { name: "审判 (Judgement)", keys: "重生、召唤、觉醒、宽恕", desc: "审判代表着一个重要的十字路口。通过反思过去，宽恕自己，你将响应内心的召唤，获得新生。" },
+            21: { name: "世界 (The World)", keys: "完成、整合、成就、旅行", desc: "世界代表一个周期的完美结束。你已经完成了目标，现在是享受成就、准备开启新篇章的时刻。" },
+        };
+
+        // --- 辅助函数：获取牌名 ---
+        function getCardData(index) {
+            index = parseInt(index);
+            // 大阿卡纳
+            if (index <= 21) {
+                return TAROT_DATA[index] || { name: "大阿卡纳 " + index, keys: "未知", desc: "神秘的力量正在显现..." };
+            }
+            // 简单处理小阿卡纳 (权杖/圣杯/宝剑/星币) - 22-77
+            const suits = ["权杖", "圣杯", "宝剑", "星币"];
+            const ranks = ["首牌 (Ace)", "二 (Two)", "三 (Three)", "四 (Four)", "五 (Five)", "六 (Six)", "七 (Seven)", "八 (Eight)", "九 (Nine)", "十 (Ten)", "侍从 (Page)", "骑士 (Knight)", "王后 (Queen)", "国王 (King)"];
+            
+            const minorIndex = index - 22;
+            const suitIndex = Math.floor(minorIndex / 14);
+            const rankIndex = minorIndex % 14;
+
+            if (suitIndex < 4) {
+                const suit = suits[suitIndex];
+                const rank = ranks[rankIndex];
+                // 简单的通用释义
+                const genericDesc = `这是${suit}牌组的${rank}。${suit}通常代表${
+                    suitIndex===0?"行动与激情":suitIndex===1?"情感与关系":suitIndex===2?"思想与冲突":"物质与现实"
+                }。`;
+                
+                return {
+                    name: `${suit}${rank}`,
+                    keys: `${suit}, ${rankIndex+1}`,
+                    desc: genericDesc + " (请结合具体问题进行直觉解读)"
+                };
+            }
+            return { name: "未知卡牌", keys: "Unknown", desc: "虚空中的迷雾..." };
+        }
+
+        function log(msg) { const d = document.getElementById('debug-console'); d.innerHTML = `> ${msg}<br>` + d.innerHTML; }
+
+        const CONFIG = {
+            cardCount: 24, radius: 11.0, rotateSpeed: 1.5, starCount: 2000,
+            bloomStrength: 0.15, bloomThreshold: 0.1, damping: 0.94, pullDistance: 2.5,   
+            backTextureUrl: './assets/back.jpg', tarotBaseUrl: './assets/', 
+            deck: [], colors: { gold: 0xd4af37 },
+            minGrabTime: 300 
+        };
+
+        let scene, camera, renderer, composer, cardGroup, starField;
+        let cards = [], particles = [], raycaster = new THREE.Raycaster();
+        let textureLoader, handCoords = new THREE.Vector2(), prevHandX = 0, rotationVelocity = 0, currentGesture = 'NONE';
+        let hoveredCard = null, heldCard = null;
+        let cursorEl = document.getElementById('hand-cursor');
+        let statusGesture = document.getElementById('gesture-text');
+        let statusAction = document.getElementById('action-text');
+        let isGameReady = false;
+        let grabStartTime = 0; let isPinchingState = false;
+
+        init();
+
+        function init() {
+            scene = new THREE.Scene(); scene.background = new THREE.Color(0x000000); scene.fog = new THREE.FogExp2(0x000000, 0.02);
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100); camera.position.set(0, 0, 0);
+            
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8); dirLight.position.set(0, 10, 0); scene.add(dirLight);
+            const camLight = new THREE.PointLight(0xffffff, 0.5, 20); camera.add(camLight); scene.add(camera);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true }); 
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+            renderer.toneMapping = THREE.CineonToneMapping;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.strength = CONFIG.bloomStrength; bloomPass.radius = 0.4; bloomPass.threshold = CONFIG.bloomThreshold;
+            composer = new EffectComposer(renderer); composer.addPass(renderScene); composer.addPass(bloomPass);
+
+            createStarfield(); loadAssetsAndStart();
+            window.addEventListener('resize', onWindowResize); animate();
+        }
+
+        function loadAssetsAndStart() {
+            textureLoader = new THREE.TextureLoader(); textureLoader.crossOrigin = null;
+            textureLoader.load(CONFIG.backTextureUrl, (backTex) => {
+                document.getElementById('load-progress').style.width = '50%';
+                createCardRing(backTex); startCamera();
+            }, undefined, (err) => { log("Back texture error."); });
+        }
+
+        function createCardRing(backTex) {
+            cardGroup = new THREE.Group(); cardGroup.frustumCulled = false; scene.add(cardGroup);
+            
+            // [圆角修复] 将 radius 调整为 0.2，并提高 segments 到 8，确保圆角平滑
+            const geometry = new RoundedBoxGeometry(1.8, 3.0, 0.04, 8, 0.2); 
+            
+            const matSide = new THREE.MeshStandardMaterial({ color: CONFIG.colors.gold, roughness: 0.3, metalness: 0.8 });
+            const matBack = new THREE.MeshStandardMaterial({ map: backTex, color: 0xffffff, roughness: 0.6, metalness: 0.2, emissive: 0x000000 });
+
+            let fullDeck = []; for (let i = 0; i <= 77; i++) fullDeck.push(i);
+            for (let i = fullDeck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [fullDeck[i], fullDeck[j]] = [fullDeck[j], fullDeck[i]]; }
+
+            let loadedCount = 0;
+            for (let i = 0; i < CONFIG.cardCount; i++) {
+                const cardID = fullDeck[i]; const fileName = cardID + ".jpg"; const frontUrl = CONFIG.tarotBaseUrl + fileName;
+                const matFront = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6 });
+                
+                textureLoader.load(frontUrl, (tex) => {
+                    matFront.map = tex; matFront.color.setHex(0xffffff); matFront.needsUpdate = true;
+                    loadedCount++;
+                    if(loadedCount >= 5 && !isGameReady) { isGameReady = true; document.getElementById('loader').style.display = 'none'; }
+                }, undefined, () => { loadedCount++; if(loadedCount >= 5 && !isGameReady) { isGameReady = true; document.getElementById('loader').style.display = 'none'; } });
+
+                const materials = [matSide, matSide, matSide, matSide, matBack, matFront];
+                const card = new THREE.Mesh(geometry, materials);
+                card.frustumCulled = false;
+                const angle = (i / CONFIG.cardCount) * Math.PI * 2;
+                const x = Math.sin(angle) * CONFIG.radius; const z = Math.cos(angle) * CONFIG.radius;
+                card.position.set(x, -1, -z); card.lookAt(0, -1, 0);
+                card.userData = { id: i, cardID: cardID, basePos: card.position.clone(), baseRot: card.rotation.clone(), isDissolving: false, isRevealed: false };
+                cardGroup.add(card); cards.push(card);
+            }
+        }
+
+        function createStarfield() {
+            const geo = new THREE.BufferGeometry(); const pos = [];
+            for(let i=0; i<CONFIG.starCount; i++) pos.push((Math.random()-0.5)*100, (Math.random()-0.5)*60, (Math.random()-0.5)*100);
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            const mat = new THREE.PointsMaterial({color: 0xffffff, size: 0.1, transparent: true, opacity: 0.5});
+            starField = new THREE.Points(geo, mat); starField.frustumCulled = false; scene.add(starField);
+        }
+
+        function updateLogic() {
+            const sx = (handCoords.x + 1) / 2 * window.innerWidth; const sy = (-handCoords.y + 1) / 2 * window.innerHeight;
+            cursorEl.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
+            if(starField) starField.rotation.y += 0.0002;
+            raycaster.setFromCamera(handCoords, camera);
+            if(cards.length > 0) {
+                const intersects = raycaster.intersectObjects(cards);
+                if (intersects.length > 0 && !heldCard) {
+                    const target = intersects[0].object;
+                    if (hoveredCard !== target && !target.userData.isDissolving && !target.userData.isRevealed) {
+                        if (hoveredCard) animateHover(hoveredCard, false);
+                        hoveredCard = target; animateHover(hoveredCard, true);
+                    }
+                } else if (!heldCard && hoveredCard) { animateHover(hoveredCard, false); hoveredCard = null; }
+            }
+            handleGestures();
+            if (!heldCard && cardGroup) { 
+                cardGroup.rotation.y += rotationVelocity; rotationVelocity *= CONFIG.damping; 
+                if (Math.abs(rotationVelocity) < 0.0001) rotationVelocity = 0;
+            }
+        }
+
+        function handleGestures() {
+            statusGesture.innerText = currentGesture;
+            if (currentGesture === 'PINCH') {
+                statusAction.innerText = "HOLDING"; cursorEl.className = 'pinch'; rotationVelocity *= 0.5; 
+                if (hoveredCard && !heldCard) grabCard(hoveredCard);
+            } else if (currentGesture === 'OPEN') {
+                cursorEl.className = '';
+                if (heldCard) {
+                    const duration = Date.now() - grabStartTime;
+                    if (duration < CONFIG.minGrabTime) {
+                        statusAction.innerText = "CANCELED"; returnCard(heldCard);
+                    } else {
+                        statusAction.innerText = "REVEAL!"; revealAndExplodeInPlace(heldCard);
+                    }
+                    heldCard = null;
+                } else {
+                    statusAction.innerText = "ROTATE";
+                    const deltaX = handCoords.x - prevHandX;
+                    if (Math.abs(deltaX) > 0.0005) rotationVelocity = -deltaX * CONFIG.rotateSpeed;
+                }
+            }
+            prevHandX = handCoords.x;
+        }
+
+        function animateHover(c, h) {
+            const scale = h ? 1.1 : 1.0; new TWEEN.Tween(c.scale).to({ x:scale, y:scale, z:scale }, 200).start();
+        }
+        function grabCard(c) {
+            heldCard = c; grabStartTime = Date.now();
+            const t = c.userData.basePos.clone().add(c.userData.basePos.clone().normalize().multiplyScalar(-CONFIG.pullDistance)); t.y += 0.5; 
+            new TWEEN.Tween(c.position).to(t, 300).easing(TWEEN.Easing.Back.Out).start();
+        }
+        function returnCard(c) {
+            new TWEEN.Tween(c.position).to(c.userData.basePos, 500).easing(TWEEN.Easing.Elastic.Out).start();
+        }
+
+        // --- 核心：翻牌并显示解读 ---
+        function revealAndExplodeInPlace(c) {
+            c.userData.isRevealed = true;
+            
+            // 1. 获取牌义
+            const cardData = getCardData(c.userData.cardID);
+            
+            // 2. 显示到左上角面板
+            const panel = document.getElementById('reading-panel');
+            document.getElementById('reading-title').innerText = cardData.name;
+            document.getElementById('reading-keywords').innerText = cardData.keys;
+            document.getElementById('reading-text').innerText = cardData.desc;
+            panel.style.opacity = 1;
+
+            // 3. 添加历史
+            addToHistory(cardData.name);
+
+            // 4. 旋转动画 (强制正位)
+            const dummy = new THREE.Object3D(); dummy.position.copy(c.position); dummy.lookAt(camera.position); 
+            const targetRot = dummy.rotation.clone(); targetRot.y += Math.PI; targetRot.z = 0;
+
+            new TWEEN.Tween(c.rotation).to({x: targetRot.x, y: targetRot.y, z: targetRot.z}, 800).easing(TWEEN.Easing.Back.Out).start();
+            new TWEEN.Tween(c.scale).to({x:1.3, y:1.3, z:1.3}, 800).start();
+            
+            // 5. 3秒后销毁
+            setTimeout(() => { explodeCard(c); }, 3000);
+        }
+
+        function addToHistory(name) {
+            const list = document.getElementById('history-list');
+            const li = document.createElement('li'); li.className = 'history-item';
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+            li.innerHTML = `<span>${name}</span> <span class="history-time">${timeStr}</span>`;
+            list.prepend(li);
+        }
+
+        function explodeCard(c) {
+            if(c.userData.isDissolving) return;
+            c.userData.isDissolving = true; 
+            createExplosion(c);
+            
+            // 隐藏解读面板
+            document.getElementById('reading-panel').style.opacity = 0;
+
+            c.visible = false; c.position.set(999, 999, 999);
+        }
+
+        function createExplosion(m) {
+            const count = 800; const geo = new THREE.BufferGeometry(); const pos = [], vel = []; const wp = new THREE.Vector3(); m.getWorldPosition(wp);
+            for(let i=0;i<count;i++){ 
+                pos.push(wp.x+(Math.random()-.5)*1.8, wp.y+(Math.random()-.5)*2.8, wp.z); 
+                vel.push((Math.random()-.5)*0.15, (Math.random()-.5)*0.15, (Math.random()-.5)*0.15); 
+            }
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            const p = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.08, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending }));
+            p.userData={vel:vel, life:1}; scene.add(p); particles.push(p);
+        }
+
+        function updateParticles() {
+            for(let i=particles.length-1;i>=0;i--){
+                let p=particles[i]; p.userData.life -= 0.02; 
+                const pos=p.geometry.attributes.position.array, v=p.userData.vel;
+                for(let j=0;j<pos.length/3;j++){ pos[j*3]+=v[j*3]; pos[j*3+1]+=v[j*3+1]; pos[j*3+2]+=v[j*3+2]; }
+                p.geometry.attributes.position.needsUpdate=true; p.material.opacity = p.userData.life * 0.7; 
+                if(p.userData.life<=0){ scene.remove(p); particles.splice(i,1); }
+            }
+        }
+
+        async function startCamera() {
+            const v = document.querySelector('.input_video');
+            const h = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+            h.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7});
+            h.onResults(res => {
+                if(res.multiHandLandmarks.length>0){
+                    const lm=res.multiHandLandmarks[0], idx=lm[8], thm=lm[4];
+                    handCoords.x += ((1-idx.x)*2-1 - handCoords.x)*0.3; handCoords.y += (-(idx.y*2-1) - handCoords.y)*0.3;
+                    const dist = Math.hypot(idx.x-thm.x, idx.y-thm.y);
+                    if (isPinchingState) { if (dist > 0.08) isPinchingState = false; } else { if (dist < 0.04) isPinchingState = true; }
+                    currentGesture = isPinchingState ? 'PINCH' : 'OPEN';
+                }
+            });
+            const cam = new Camera(v, {onFrame: async () => await h.send({image:v}), width:640, height:480});
+            await cam.start();
+        }
+        function onWindowResize() { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); }
+        function animate(t) { requestAnimationFrame(animate); TWEEN.update(t); updateLogic(); updateParticles(); composer.render(); }
+    </script>
+</body>
+</html>
