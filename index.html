@@ -174,13 +174,24 @@
             }
         }
 
-        function createStarfield() {
-            const geo = new THREE.BufferGeometry(); const pos = [];
-            for(let i=0; i<CONFIG.starCount; i++) pos.push((Math.random()-0.5)*100, (Math.random()-0.5)*60, (Math.random()-0.5)*100);
-            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-            const mat = new THREE.PointsMaterial({color: 0xffffff, size: 0.1, transparent: true, opacity: 0.5});
-            starField = new THREE.Points(geo, mat); scene.add(starField);
-        }
+function createStarfield() {
+    const geo = new THREE.BufferGeometry();
+    const pos = [];
+    for(let i = 0; i < 1500; i++) {  // 增加星星的数量
+        pos.push((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200); // 扩大范围
+    }
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+        color: 0xffffff, 
+        size: 0.25,  // 增大星星的大小
+        transparent: true, 
+        opacity: 0.95  // 增强星星的可见性
+    });
+    starField = new THREE.Points(geo, mat); 
+    scene.add(starField);
+}
+
+
 
         function updateLogic() {
             const sx = (handCoords.x + 1) / 2 * window.innerWidth; const sy = (-handCoords.y + 1) / 2 * window.innerHeight;
@@ -281,7 +292,7 @@
                 panel.style.opacity = 0;
                 // 卡牌炸开
                 explodeCard(c); 
-            }, 5500);
+            }, 2500);
         }
 
         function explodeCard(c) {
